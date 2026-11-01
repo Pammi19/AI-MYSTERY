@@ -15,6 +15,8 @@ import { Investigation, InvestigationNote, Mystery } from './models.js';
 
 const app = express();
 const api = express.Router();
+// Render terminates TLS and forwards requests through its proxy.
+app.set('trust proxy', 1);
 type OwnedRequest = Request & { ownerId?: string };
 const error = (code: string, message: string, status = 400) => Object.assign(new Error(message), { code, status });
 const sign = (id: string) => crypto.createHmac('sha256', config.sessionSecret).update(id).digest('hex');
@@ -68,17 +70,51 @@ function validateCase(input: z.infer<typeof generatedSchema>) {
 
 async function generateCase(scenario: string, category: string, difficulty: string) {
   const model = new GoogleGenAI({ apiKey: config.geminiKey });
-  const prompt = `Create an entirely fictional, logically solvable detective game from the scenario below. Return ONLY JSON matching this shape: {title,category,difficulty,incident:{description,location,date,discoveredAt},suspects:[{id,name,age?,relationship,biography,motive,alibi,traits?}],culpritId,timeline:[{time,event,relatedSuspectIds,evidenceIds}],evidence:[{id,type,title,description,timestamp,relatedSuspectIds,location?,content,significance,clueClassification}],solution:{motive,opportunity,method,timelineSummary,criticalEvidenceIds,explanation,redHerringExplanations:[{evidenceId,explanation}]}}. Generate 3-5 distinctive suspects and 8-12 evidence items of varied types from chat,image,cctv,witness,digital,physical,timeline. Use ISO timestamps from one fictional date. IDs must be unique, evidence IDs evidence_1 etc. Make a fixed culprit with plausible motive/opportunity. At least two independent critical clues must logically identify culprit. Explain every red herring. All clues and timeline must agree. image evidence must describe an illustration and say it is simulated, never claim an authentic photo. CCTV is simulated. Output content suitable for rendering as JSON/text, not HTML. Category=${category}; difficulty=${difficulty}. Scenario: ${scenario}`;
-  const result = await model.models.generateContent({ model: config.geminiModel, contents: prompt, config: { responseMimeType: 'application/json', maxOutputTokens: 8192 } });
-  const text = result.text?.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  if (!text) throw error('AI_GENERATION_FAILED', 'The mystery generator returned an empty response. Please try again.', 502);
-  let parsed: unknown;
-  try { parsed = JSON.parse(text); } catch { throw error('AI_OUTPUT_INVALID', 'The mystery generator returned malformed data. Please try again.', 502); }
-  try { return validateCase(generatedSchema.parse(parsed)); }
-  catch (e) {
-    if ((e as any)?.code === 'AI_OUTPUT_INVALID') throw e;
-    throw error('AI_OUTPUT_INVALID', 'The generated case did not meet the investigation requirements. Please try again.', 502);
+  const prompt = `Create an entirely fictional, logically solvable detective game from the scenario below. Return ONLY JSON matching this shape: {title,category,difficulty,incident:{description,location,date,discoveredAt},suspects:[{id,name,age?,relationship,biography,motive,alibi,traits?}],culpritId,timeline:[{time,event,relatedSuspectIds,evidenceIds}],evidence:[{id,type,title,description,timestamp,relatedSuspectIds,location?,content,significance,clueClassification}],solution:{motive,opportunity,method,timelineSummary,criticalEvidenceIds,explanation,redHerringExplanations:[{evidenceId,explanation}]}}. Generate 3-5 distinctive suspects and 8-12 evidence items of varied types from chat,image,cctv,witness,digital,physical,timeline. Use ISO timestamps from one fictional date. IDs must be unique, evidence IDs evidence_1 etc. Make a fixed culprit with plausible motive/opportunity. At least two independent critical clues must logically identify culprit. Explain every red herring. All clues and timeline must agree. Timeline items MUST be ordered earliest to latest. image evidence must describe an illustration and say it is simulated, never claim an authentic photo. CCTV is simulated. Output content suitable for rendering as JSON/text, not HTML. Category=${category}; difficulty=${difficulty}. Scenario: ${scenario}`;
+
+  let correction = '';
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const result = await model.models.generateContent({ model: config.geminiModel, contents: `${prompt}${correction}`, config: { responseMimeType: 'application/json', maxOutputTokens: 12000 } });
+    const text = result.text?.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    if (!text) {
+      correction = '\nYour previous response was empty. Return the complete case as valid JSON.';
+      console.warn(`Gemini returned an empty response (attempt ${attempt}).`);
+      continue;
+    }
+
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); }
+    catch {
+      correction = '\nYour previous response was not valid JSON. Return the complete case as valid JSON without markdown fences.';
+      console.warn(`Gemini returned malformed JSON (attempt ${attempt}).`);
+      continue;
+    }
+
+    // Sorting the timeline is safe: its timestamps define the intended order.
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as any).timeline)) {
+      const timeline = (parsed as any).timeline;
+      if (timeline.every((entry: any) => entry && typeof entry.time === 'string' && !Number.isNaN(Date.parse(entry.time)))) {
+        timeline.sort((a: any, b: any) => Date.parse(a.time) - Date.parse(b.time));
+      }
+    }
+
+    const shape = generatedSchema.safeParse(parsed);
+    if (!shape.success) {
+      const issues = shape.error.issues.slice(0, 8).map(issue => `${issue.path.join('.') || 'case'}: ${issue.message}`).join('; ');
+      correction = `\nYour previous case failed these requirements: ${issues}. Correct them and return the complete JSON case.`;
+      console.warn(`Gemini case failed schema validation (attempt ${attempt}): ${issues}`);
+      continue;
+    }
+
+    try { return validateCase(shape.data); }
+    catch (e) {
+      const message = e instanceof Error ? e.message : 'The case was inconsistent.';
+      correction = `\nYour previous case failed this consistency check: ${message} Correct the issue and return the complete JSON case.`;
+      console.warn(`Gemini case failed consistency validation (attempt ${attempt}): ${message}`);
+    }
   }
+
+  throw error('AI_OUTPUT_INVALID', 'The generated case did not meet the investigation requirements after a retry. Please try again.', 502);
 }
 
 api.get('/health', (_req, res) => success(res, { status: 'ok' }));
