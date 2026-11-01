@@ -15,7 +15,7 @@ Requirements: Node.js 22 or 24, npm, MongoDB, and a Gemini API key.
 
 ## Deploy to Render
 
-This repository includes a Render Blueprint at `render.yaml`. It creates one Node web service that builds both workspaces, serves the React app and `/api/v1` from the same origin, and checks `/api/v1/health`.
+This repository includes a Render Blueprint at `render.yaml`. It creates one Node web service that installs build-time development dependencies, builds both workspaces, serves the React app and `/api/v1` from the same origin, and checks `/api/v1/health`.
 
 1. Push this repository to GitHub.
 2. In Render, choose **New > Blueprint** and connect the repository containing `render.yaml`.
