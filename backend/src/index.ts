@@ -74,7 +74,20 @@ async function generateCase(scenario: string, category: string, difficulty: stri
 
   let correction = '';
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const result = await model.models.generateContent({ model: config.geminiModel, contents: `${prompt}${correction}`, config: { responseMimeType: 'application/json', maxOutputTokens: 12000 } });
+    let result;
+    for (let requestAttempt = 1; ; requestAttempt++) {
+      try {
+        result = await model.models.generateContent({ model: config.geminiModel, contents: `${prompt}${correction}`, config: { responseMimeType: 'application/json', maxOutputTokens: 12000 } });
+        break;
+      } catch (e) {
+        const failure = e as { status?: number; code?: number | string; message?: string };
+        const isTemporaryUnavailable = failure.status === 503 || failure.code === 503 || failure.code === 'UNAVAILABLE' || /\bUNAVAILABLE\b|currently experiencing high demand/i.test(failure.message ?? '');
+        if (!isTemporaryUnavailable || requestAttempt >= 3) throw e;
+        const delayMs = requestAttempt * 1500;
+        console.warn(`Gemini is temporarily unavailable; retrying in ${delayMs}ms (attempt ${requestAttempt + 1}/3).`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
     const text = result.text?.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     if (!text) {
       correction = '\nYour previous response was empty. Return the complete case as valid JSON.';
