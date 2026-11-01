@@ -70,7 +70,7 @@ function validateCase(input: z.infer<typeof generatedSchema>) {
 
 async function generateCase(scenario: string, category: string, difficulty: string) {
   const model = new GoogleGenAI({ apiKey: config.geminiKey });
-  const prompt = `Create an entirely fictional, logically solvable detective game from the scenario below. Return ONLY JSON matching this shape: {title,category,difficulty,incident:{description,location,date,discoveredAt},suspects:[{id,name,age?,relationship,biography,motive,alibi,traits?}],culpritId,timeline:[{time,event,relatedSuspectIds,evidenceIds}],evidence:[{id,type,title,description,timestamp,relatedSuspectIds,location?,content,significance,clueClassification}],solution:{motive,opportunity,method,timelineSummary,criticalEvidenceIds,explanation,redHerringExplanations:[{evidenceId,explanation}]}}. Generate 3-5 distinctive suspects and 8-12 evidence items of varied types from chat,image,cctv,witness,digital,physical,timeline. Use ISO timestamps from one fictional date. IDs must be unique, evidence IDs evidence_1 etc. Make a fixed culprit with plausible motive/opportunity. At least two independent critical clues must logically identify culprit. Explain every red herring. All clues and timeline must agree. Timeline items MUST be ordered earliest to latest. image evidence must describe an illustration and say it is simulated, never claim an authentic photo. CCTV is simulated. Output content suitable for rendering as JSON/text, not HTML. Category=${category}; difficulty=${difficulty}. Scenario: ${scenario}`;
+  const prompt = `Create an entirely fictional, logically solvable detective game from the scenario below. Return ONLY JSON matching this shape: {title,category,difficulty,incident:{description,location,date,discoveredAt},suspects:[{id,name,age?,relationship,biography,motive,alibi,traits?}],culpritId,timeline:[{time,event,relatedSuspectIds,evidenceIds}],evidence:[{id,type,title,description,timestamp,relatedSuspectIds,location?,content,significance,clueClassification}],solution:{motive,opportunity,method,timelineSummary,criticalEvidenceIds,explanation,redHerringExplanations:[{evidenceId,explanation}]}}. Generate 3-5 distinctive suspects and 8-12 evidence items of varied types from chat,image,cctv,witness,digital,physical,timeline. Use ISO timestamps from one fictional date. Set incident.date to the earliest incident time and incident.discoveredAt to the latest case time. EVERY timeline time and evidence timestamp must fall within that inclusive incident date range. Order timeline items earliest to latest. IDs must be unique, evidence IDs evidence_1 etc. Make a fixed culprit with plausible motive/opportunity. At least two independent critical clues must logically identify the culprit, and list those same evidence IDs in solution.criticalEvidenceIds. For every evidence item, clueClassification MUST be exactly one of these lowercase strings: critical, supporting, red_herring. Do not use synonyms or other labels. Use critical only for clues that directly help prove the culprit; use supporting for other relevant evidence; use red_herring only for a misleading clue and explain each one in solution.redHerringExplanations. All clues and timeline must agree. image evidence must describe an illustration and say it is simulated, never claim an authentic photo. CCTV is simulated. Output content suitable for rendering as JSON/text, not HTML. Category=${category}; difficulty=${difficulty}. Scenario: ${scenario}`;
 
   let correction = '';
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -101,6 +101,21 @@ async function generateCase(scenario: string, category: string, difficulty: stri
       correction = '\nYour previous response was not valid JSON. Return the complete case as valid JSON without markdown fences.';
       console.warn(`Gemini returned malformed JSON (attempt ${attempt}).`);
       continue;
+    }
+
+    // Map common model synonyms onto the app's deliberately small label set.
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as any).evidence)) {
+      const aliases: Record<string, string> = {
+        incriminating: 'critical', decisive: 'critical', crucial: 'critical',
+        ambiguous: 'supporting', exculpatory: 'supporting', corroborative: 'supporting', corroborating: 'supporting',
+        misleading: 'red_herring', 'false lead': 'red_herring', false_lead: 'red_herring',
+      };
+      for (const evidence of (parsed as any).evidence) {
+        if (typeof evidence?.clueClassification === 'string') {
+          const label = evidence.clueClassification.trim().toLowerCase().replaceAll('-', ' ');
+          evidence.clueClassification = aliases[label] ?? aliases[label.replaceAll(' ', '_')] ?? label;
+        }
+      }
     }
 
     // Sorting the timeline is safe: its timestamps define the intended order.
