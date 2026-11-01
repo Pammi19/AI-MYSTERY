@@ -24,7 +24,7 @@ This repository includes a Render Blueprint at `render.yaml`. It creates one Nod
 
 The Blueprint uses Render's free web service plan. Free web services spin down after 15 minutes without traffic and the next request can take about a minute to start. MongoDB remains hosted separately. For Atlas network access, add the outbound CIDR ranges shown under the Render service's **Connect > Outbound** tab to Atlas **Security > Network Access**. If the first deploy fails while connecting to Atlas, add these ranges and redeploy. Avoid opening Atlas to `0.0.0.0/0`. If you add a custom domain, the app remains same-origin and needs no API URL change.
 
-If you already have a Render service with the same name, rename `ai-mystery-room` in `render.yaml` before syncing the Blueprint. Secrets declared with `sync: false` are prompted during initial Blueprint creation; for a later Blueprint sync, set or update them in the service's Environment page.
+The service created by this Blueprint is named `ai-mystery-room-fs` to keep it separate from older Render services. Secrets declared with `sync: false` are prompted during initial Blueprint creation; for a later Blueprint sync, set or update them in the service's Environment page.
 
 ## Backend configuration
 

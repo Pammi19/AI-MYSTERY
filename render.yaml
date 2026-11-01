@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ai-mystery-room
+    name: ai-mystery-room-fs
     runtime: node
     plan: free
     buildCommand: npm ci && npm run build
